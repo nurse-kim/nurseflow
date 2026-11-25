@@ -1,10 +1,853 @@
 <!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NurseFlow 시제품</title>
+<script>
+/* 서버 주소: 따옴표 안의 글자를 /exec로 끝나는 주소로 바꾸세요 */
+var API_URL = '여기에_서버_주소';
+window.onerror = function (msg, src, line) {
+  var b = document.getElementById('errBox');
+  if (b) { b.style.display = 'block'; b.textContent = '오류: ' + msg + ' (줄 ' + line + ') - 이 화면을 캡처해 보내 주세요.'; }
+};
+</script>
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<style>
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,'Malgun Gothic',sans-serif;background:#f2f4f7;font-size:16px;color:#222}
+header{background:#1f5f8b;color:#fff;padding:8px 12px;position:sticky;top:0;z-index:5}
+header button{padding:6px 10px;font-size:14px}
+.sub{font-size:13px;opacity:.9;margin-top:4px}
+main{padding:12px;max-width:640px;margin:auto;padding-bottom:60px}
+.card{background:#fff;border-radius:10px;padding:12px;margin-bottom:10px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+h3{margin:2px 0 10px;font-size:16px;color:#1f5f8b}
+button{font-size:16px;padding:10px 14px;border:0;border-radius:8px;background:#1f5f8b;color:#fff;margin:3px}
+button.sec{background:#e3e8ee;color:#222}
+button.warn{background:#c0392b;color:#fff}
+button.big{width:100%;padding:14px;margin:8px 0}
+input,select{font-size:16px;padding:8px;border:1px solid #bbb;border-radius:6px;width:100%;background:#fff}
+input.sm{width:100px}
+input[type=checkbox]{width:22px;height:22px}
+.row{display:flex;gap:8px;align-items:center;margin:6px 0;flex-wrap:wrap}
+.row label{min-width:90px}
+.chips button{background:#e3e8ee;color:#222;padding:8px 10px}
+.chips button.on{background:#1f5f8b;color:#fff}
+.red{color:#c0392b!important;border-color:#c0392b!important;font-weight:bold}
+.muted{color:#777;font-size:13px}
+.del{text-decoration:line-through;color:#999}
+.tabs{display:flex;gap:4px;margin:8px 0}
+.tabs button{flex:1;background:#e3e8ee;color:#222;margin:0}
+.tabs button.on{background:#1f5f8b;color:#fff}
+.pt{cursor:pointer}
+#modal{position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;z-index:10;align-items:center;justify-content:center}
+#modal .box{background:#fff;border-radius:12px;padding:16px;width:94%;max-width:500px;max-height:88vh;overflow:auto}
+#toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#333;color:#fff;padding:10px 16px;border-radius:20px;display:none;z-index:30;max-width:90%}
+#busy{position:fixed;inset:0;background:rgba(255,255,255,.6);display:none;z-index:25;align-items:center;justify-content:center;font-size:18px}
+.demo{background:#e67e22;color:#fff;text-align:center;font-size:13px;padding:4px;display:none}
+#errBox{display:none;background:#c0392b;color:#fff;padding:10px;font-size:14px}
+table{width:100%;border-collapse:collapse;font-size:14px}
+td,th{border-bottom:1px solid #eee;padding:6px 4px;text-align:left}
+td.n,th.n{text-align:right}
+</style>
+</head>
+<body>
+<div id="errBox"></div>
+<div id="demoBar" class="demo"></div>
+<header id="hdr"><b>NurseFlow</b></header>
+<main id="main"><div class="card">앱을 불러오는 중입니다. 이 문구가 계속 보이면 코드가 일부 빠졌을 수 있습니다.</div></main>
+<div id="modal"><div class="box" id="mbox"></div></div>
+<div id="busy">처리 중…</div>
+<div id="toast"></div>
+<script>
+/* ===== 1. 기본 도구 ===== */
+var S = { user: null, data: null, view: 'login', reg: null, tab: 'in', lastLoad: 0, slots: [] };
+var DIET = [['d_rice', '밥'], ['d_soup', '국'], ['d_side', '반찬']];
+var RATIO = ['0', '1/4', '1/3', '1/2', '2/3', '3/4', '전량', '기타'];
+var VS = [['SBP', 'mmHg'], ['DBP', 'mmHg'], ['HR', '회/분'], ['BT', '°C'], ['RR', '회/분'], ['SpO2', '%']];
+function $(id) { return document.getElementById(id); }
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+function js(v) { return esc(JSON.stringify(String(v))); }
+var LS = {
+  get: function (k, d) { try { var v = localStorage.getItem('nf_' + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
+  set: function (k, v) { localStorage.setItem('nf_' + k, JSON.stringify(v)); },
+  del: function (k) { localStorage.removeItem('nf_' + k); }
+};
+function toast(t) { var e = $('toast'); e.textContent = t; e.style.display = 'block'; clearTimeout(toast.t); toast.t = setTimeout(function () { e.style.display = 'none'; }, 3500); }
+function busy(on) { $('busy').style.display = on ? 'flex' : 'none'; }
+function modal(h) { $('mbox').innerHTML = h; $('modal').style.display = 'flex'; }
+function closeModal() { stopScan(); $('modal').style.display = 'none'; }
+async function run(fn) { busy(true); try { await fn(); } catch (e) { alert(e.message || e); } finally { busy(false); } }
+function val(el) { var v = String(el.value).trim(); if (v === '') return null; var n = Number(v); if (isNaN(n) || n < 0) throw new Error('숫자가 올바르지 않습니다: ' + v); return n; }
 
+/* ===== 2. 시각과 I/O 구간 ===== */
+function pad(n) { return (n < 10 ? '0' : '') + n; }
+function now() { return new Date(Date.now() + LS.get('offset', 0)); }
+function fmt(d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()); }
+function fmtD(d) { return fmt(d).slice(0, 10); }
+function parse(s) { var m = String(s || '').match(/(\d{4})-(\d{1,2})-(\d{1,2})[ T](\d{1,2}):(\d{2})/); return m ? new Date(+m[1], m[2] - 1, +m[3], +m[4], +m[5]) : null; }
+function addDays(ds, n) { var p = ds.split('-'); return fmtD(new Date(+p[0], p[1] - 1, +p[2] + n)); }
+function mins(hm) { var p = String(hm).split(':'); return (+p[0]) * 60 + (+p[1]); }
+function addMin(hm, n) { var m = ((mins(hm) + n) % 1440 + 1440) % 1440; return pad(Math.floor(m / 60)) + ':' + pad(m % 60); }
+function dtl(s) { return String(s).replace(' ', 'T'); }
+function fromDtl(v) { return String(v || '').replace('T', ' ').slice(0, 16); }
+function setg(k) { return S.data.settings[k]; }
+function cut(d, b) {
+  var m = d.getHours() * 60 + d.getMinutes(), ds = fmtD(d);
+  if (m < mins(b.Day)) return { date: addDays(ds, -1), name: 'Night' };
+  if (m < mins(b.Eve)) return { date: ds, name: 'Day' };
+  if (m < mins(b.Night)) return { date: ds, name: 'Eve' };
+  return { date: ds, name: 'Night' };
+}
+function ioOf(d) { var c = cut(d, setg('io')); return { ioDate: c.date, period: c.name }; }
+function shiftId() { var c = cut(now(), setg('shift')); return c.date + ' ' + c.name; }
+function since() { return addDays(ioOf(now()).ioDate, -1); }
+function inRange(t) { var d = parse(t); return !!d && ioOf(d).ioDate >= since(); }
 
+/* ===== 3. 서버 통신 ===== */
+function apiUrl() { return /^https:\/\//.test(API_URL) ? API_URL : LS.get('api', ''); }
+async function api(action, body, by) {
+  if (!apiUrl()) throw new Error('서버 주소가 없습니다.');
+  var q = Object.assign({ action: action, by: by || (S.user ? S.user.empId : '') }, body || {});
+  var res = await fetch(apiUrl(), { method: 'POST', body: JSON.stringify(q) });
+  var j;
+  try { j = await res.json(); } catch (e) { throw new Error('서버 응답을 읽지 못했습니다. 서버 주소와 배포 상태를 확인하세요.'); }
+  if (!j.ok) throw new Error(j.error);
+  return j.data;
+}
+async function reload() {
+  S.data = await api('bootstrap', { since: addDays(fmtD(now()), -3) });
+  S.user = S.data.user; S.lastLoad = Date.now();
+}
+async function sendRecords(recs) {
+  try { await api('addRecords', { records: recs }); toast('저장했습니다 (EMR 전송 완료)'); }
+  catch (e) {
+    if (e instanceof TypeError) {
+      var q = LS.get('queue', []); q.push({ by: S.user.empId, records: recs }); LS.set('queue', q);
+      toast('네트워크 오류: 전송 대기로 보관했습니다. 연결되면 자동으로 보냅니다.');
+    } else throw e;
+  }
+}
+var flushing = false;
+async function flushQueue(manual) {
+  var q = LS.get('queue', []);
+  if (flushing || !q.length) { if (manual === true) toast('보낼 기록이 없습니다.'); return; }
+  flushing = true; var rest = [], ok = 0;
+  for (var i = 0; i < q.length; i++) {
+    try { await api('addRecords', { records: q[i].records }, q[i].by); ok++; }
+    catch (e) {
+      if (e instanceof TypeError) rest.push(q[i]);
+      else { var f = LS.get('failed', []); f.push({ time: fmt(now()), error: e.message }); LS.set('failed', f); }
+    }
+  }
+  LS.set('queue', rest); flushing = false;
+  if (ok) {
+    toast('전송 대기 ' + ok + '건을 보냈습니다.');
+    if (S.user) { try { await reload(); } catch (e) {} if (S.view === 'home') renderHome(); }
+  }
+}
 
+/* ===== 4. 데이터 도구 ===== */
+function pat(reg) { return S.data.patients.find(function (p) { return p.regNo === reg; }); }
+function cfg(p) { try { return JSON.parse(p.config) || {}; } catch (e) { return {}; } }
+function owner(reg) { var a = S.data.assign.find(function (x) { return x.regNo === reg; }); return a ? a.empId : ''; }
+function isMine(reg) { return owner(reg) === S.user.empId; }
+function uname(id) { var u = S.data.users.find(function (x) { return x.empId === id; }); return u ? u.name : id; }
+function pLabel(p) { return (p.room ? p.room + '호 ' : '') + (p.name ? p.name + ' ' : '') + p.regNo; }
+function recsOf(reg) { return S.data.records.filter(function (r) { return r.regNo === reg; }); }
+function fluid(id) { return S.data.fluids.find(function (f) { return f.id === id; }); }
+function left(f) { return Number(f.volume) - S.data.records.filter(function (r) { return r.fluidId === f.id && r.status === 'active'; }).reduce(function (a, r) { return a + Number(r.value); }, 0); }
+function liveFluids(reg, kind) { return S.data.fluids.filter(function (f) { return f.regNo === reg && f.status === '진행' && f.kind === kind; }); }
+function needReview(f) { return f.kind === '일반' && left(f) > 0 && (f.reviewDate || '') < ioOf(now()).ioDate; }
+function sums(reg, ioDate, period) {
+  var s = { i: 0, o: 0, c: {} };
+  recsOf(reg).forEach(function (r) {
+    if (r.status !== 'active' || r.ioDate !== ioDate || (period && r.period !== period)) return;
+    var v = Number(r.value);
+    if (r.cat === '섭취' && r.unit === 'ml') s.i += v;
+    if (r.cat === '배설' && (r.unit === 'ml' || r.unit === 'g')) s.o += v;
+    if (r.unit === '회') { var k = r.item + (r.sub ? '(' + r.sub + ')' : ''); s.c[k] = (s.c[k] || 0) + v; }
+  });
+  return s;
+}
+function mk(reg, cat, item, sub, value, unit, t, extra) {
+  var io = ioOf(parse(t));
+  return Object.assign({ regNo: reg, cat: cat, item: item, sub: sub || '', value: String(value), unit: unit, recordTime: t,
+    ioDate: io.ioDate, period: io.period, fluidId: '', slot: '', status: 'active' }, extra || {});
+}
 
+/* ===== 5. 공통 화면 요소 ===== */
+function hdr(title, back) {
+  var q = LS.get('queue', []).length, f = LS.get('failed', []).length;
+  $('hdr').innerHTML = '<div class="row" style="margin:0;justify-content:space-between">' +
+    (back ? '<button class="sec" onclick="' + back + '">← 뒤로</button>' : '<b>NurseFlow</b>') +
+    '<span><button class="sec" onclick="showAlog()">🔔</button><button class="sec" onclick="renderSettings()">설정</button>' +
+    '<button class="sec" onclick="logout()">사용자 전환</button></span></div>' +
+    '<div class="sub">' + esc(S.user.name) + ' (' + esc(S.user.empId) + ') · ' + esc(title) + ' · I/O ' + ioOf(now()).period +
+    ' 구간 · <span id="clock">' + fmt(now()).slice(11) + '</span>' + (q ? ' · 전송 대기 ' + q + '건' : '') + (f ? ' · 전송 실패 ' + f + '건' : '') + '</div>';
+}
+function chips(hid, opts, def, flags) {
+  flags = flags || '';
+  return '<input type="hidden" id="' + hid + '" data-d="' + hid + '" data-def="' + esc(def || '') + '" value="' + esc(def || '') + '"' +
+    (flags.indexOf('other') >= 0 ? ' data-other="1"' : '') + (flags.indexOf('toggle') >= 0 ? ' data-toggle="1"' : '') + '>' +
+    '<span class="chips" data-for="' + hid + '">' + opts.map(function (o) {
+      return '<button type="button" data-v="' + esc(o) + '" onclick="pick(' + js(hid) + ',' + js(o) + ')">' + esc(o) + '</button>';
+    }).join('') + '</span>';
+}
+function pick(hid, v) {
+  var e = $(hid);
+  if (v === '기타' && e.dataset.other) { var x = prompt('직접 입력하세요 (예: 1/5)', ''); if (x === null || !x.trim()) return; v = x.trim(); }
+  else if (e.value === v && e.dataset.toggle) v = '';
+  e.value = v; afterInput();
+}
+function updChips() {
+  document.querySelectorAll('.chips[data-for]').forEach(function (box) {
+    var v = $(box.dataset.for).value, list = [].map.call(box.children, function (b) { return b.dataset.v; });
+    [].forEach.call(box.children, function (b) {
+      var on = b.dataset.v === v || (b.dataset.v === '기타' && v && list.indexOf(v) < 0);
+      b.className = on ? 'on' : '';
+      if (b.dataset.v === '기타') b.textContent = (on && v !== '기타') ? '기타: ' + v : '기타';
+    });
+  });
+}
+function afterInput() {
+  updChips();
+  if ($('dres')) calcDiaper();
+  if ($('vs_SBP')) vsColor();
+  if ($('vsOtherBox')) $('vsOtherBox').style.display = $('vst').value === '기타' ? 'flex' : 'none';
+  if ($('af_kind')) {
+    var mix = $('af_kind').value !== '일반 수액', once = $('af_mode').value === '일회';
+    $('af_mix').style.display = mix ? 'block' : 'none';
+    $('af_rep').style.display = once ? 'none' : 'block';
+    $('af_once').style.display = once ? 'flex' : 'none';
+  }
+}
+function timeCard() {
+  return '<div class="card"><div class="row"><label>기록 시각</label><input type="datetime-local" id="recTime" data-d="t" value="' + dtl(fmt(now())) + '" style="flex:1" onchange="afterInput()">' +
+    '<button class="sec" onclick="$(\'recTime\').value=dtl(fmt(now()));afterInput()">지금</button></div>' +
+    '<div class="muted">누락 기록은 시각을 바꿔 추가하세요. 가능 범위: ' + since() + ' ' + setg('io').Day + ' 이후</div></div>';
+}
+function recTime() {
+  var t = fromDtl($('recTime').value);
+  if (!parse(t)) throw new Error('기록 시각을 입력하세요.');
+  if (!inRange(t)) throw new Error('직전 I/O 하루보다 이전 시각은 기록할 수 없습니다.');
+  return t;
+}
 
+/* ===== 6. 로그인 · 회원가입 ===== */
+function renderLogin() {
+  S.view = 'login'; S.user = null;
+  $('hdr').innerHTML = '<b>NurseFlow 시제품</b><div class="sub">간호 I/O·V/S 기록 (가상 환자 전용)</div>';
+  var h = '';
+  if (!apiUrl()) h += '<div class="card"><h3>서버 주소 입력 (처음 1번)</h3><input id="apiIn" placeholder="https://script.google.com/macros/s/…/exec">' +
+    '<button class="big" onclick="saveApi()">저장</button></div>';
+  h += '<div class="card"><h3>로그인</h3><input id="emp" placeholder="사번" autocomplete="off" autocapitalize="off">' +
+    '<button class="big" onclick="doLogin()">로그인</button><button class="sec big" onclick="renderRegister()">회원가입</button></div>';
+  $('main').innerHTML = h;
+}
+function saveApi() {
+  var v = $('apiIn').value.trim();
+  if (!/^https:\/\/script\.google\.com\/.+\/exec$/.test(v)) { alert('/exec로 끝나는 서버 주소를 넣어 주세요.'); return; }
+  LS.set('api', v); renderLogin();
+}
+function doLogin() { var id = $('emp').value.trim(); if (id) { unlockAudio(); login(id, false); } }
+async function login(empId, restore) {
+  if (!apiUrl()) { renderLogin(); return; }
+  busy(true);
+  try { S.data = await api('bootstrap', { since: addDays(fmtD(now()), -3) }, empId); S.user = S.data.user; S.lastLoad = Date.now(); }
+  catch (e) { busy(false); LS.del('session'); renderLogin(); if (!restore) alert(e.message); return; }
+  busy(false);
+  var s = LS.get('session', null), sid = shiftId();
+  if (restore && (!s || s.shift !== sid)) { LS.del('session'); renderLogin(); toast('근무 교대 시각이 지나 로그아웃되었습니다.'); return; }
+  LS.set('session', { empId: empId, shift: sid });
+  var d = LS.get('draft_' + empId, null);
+  if (d && pat(d.reg)) {
+    LS.del('draft_' + empId); S.reg = d.reg; S.tab = d.tab; renderPatient();
+    Object.keys(d.vals).forEach(function (k) { var e = document.querySelector('#main [data-d="' + k + '"]'); if (e) e.value = d.vals[k]; });
+    afterInput(); toast('임시 보관된 입력을 불러왔습니다. 확인 후 저장하세요.'); return;
+  }
+  renderHome();
+}
+function renderRegister() {
+  $('main').innerHTML = '<div class="card"><h3>회원가입</h3>' +
+    '<div class="row"><label>직종</label><select id="rJob"><option>간호사</option></select></div>' +
+    '<div class="row"><label>사번</label><input id="rEmp" autocapitalize="off"></div>' +
+    '<div class="row"><label>이름</label><input id="rName"></div>' +
+    '<button class="big" onclick="doRegister()">가입 요청</button><button class="sec big" onclick="renderLogin()">취소</button>' +
+    '<p class="muted">수간호사가 승인하면 로그인할 수 있습니다.</p></div>';
+}
+function doRegister() {
+  var e = $('rEmp').value.trim(), n = $('rName').value.trim();
+  if (!e || !n) { alert('사번과 이름을 입력하세요.'); return; }
+  run(async function () { await api('register', { empId: e, name: n, job: $('rJob').value }, e); alert('가입 요청을 보냈습니다. 수간호사 승인 후 로그인하세요.'); renderLogin(); });
+}
+function saveDraft() {
+  if (!S.user || S.view !== 'patient') return;
+  var vals = {}, any = false;
+  document.querySelectorAll('#main [data-d]').forEach(function (e) {
+    vals[e.dataset.d] = e.value;
+    if (e.dataset.d !== 't' && e.value !== (e.dataset.def || '')) any = true;
+  });
+  if (any) LS.set('draft_' + S.user.empId, { reg: S.reg, tab: S.tab, vals: vals });
+}
+function logout(auto) {
+  saveDraft(); closeModal(); S.user = null; S.data = null; LS.del('session'); renderLogin();
+  if (auto === true) toast('근무 교대 시각입니다. 자동 로그아웃되었습니다.');
+}
 
+/* ===== 7. 홈 · 바코드 ===== */
+function renderHome() {
+  S.view = 'home'; S.reg = null; hdr('홈');
+  var io = ioOf(now());
+  var mine = S.data.patients.filter(function (p) { return isMine(p.regNo); });
+  var others = S.data.patients.filter(function (p) { return !isMine(p.regNo); });
+  var h = '<button class="big" onclick="scanThen(openOrSetup)">📷 환자 바코드 촬영</button>';
+  h += '<div class="card"><h3>내 담당 환자 (' + mine.length + '명)</h3>';
+  if (!mine.length) h += '<p class="muted">담당 환자가 없습니다. 바코드를 촬영해 환자를 열고 "담당으로 지정"을 누르세요.</p>';
+  mine.forEach(function (p) {
+    var s = sums(p.regNo, io.ioDate, io.period), gen = liveFluids(p.regNo, '일반');
+    var nf = gen.filter(function (f) { return left(f) > 0; }).length, rv = gen.some(needReview);
+    h += '<div class="card pt" style="background:#f7fafc" onclick="openPatient(' + js(p.regNo) + ')"><b>' + esc(pLabel(p)) + '</b>' +
+      '<div class="muted">' + io.period + ' 구간 섭취 ' + s.i + 'ml · 배설 ' + s.o + 'ml' + (nf ? ' · 진행 수액 ' + nf + '개' : '') + '</div>' +
+      (rv ? '<div class="red">06:00 수액 재설정 필요</div>' : '') + '</div>';
+  });
+  h += '</div>';
+  if (others.length) {
+    h += '<div class="card"><h3>병동 다른 환자</h3><p class="muted">배설량·V/S 입력 가능 (섭취량과 수정·삭제는 담당 간호사만)</p>';
+    others.forEach(function (p) {
+      var o = owner(p.regNo);
+      h += '<div class="row pt" onclick="openPatient(' + js(p.regNo) + ')">' + esc(pLabel(p)) + ' <span class="muted">담당: ' + (o ? esc(uname(o)) : '없음') + '</span></div>';
+    });
+    h += '</div>';
+  }
+  $('main').innerHTML = h;
+}
+var scanner = null;
+function scanThen(cb) {
+  S.scanCb = cb;
+  modal('<h3>바코드 촬영</h3><div id="reader" style="width:100%"></div>' +
+    '<div class="row"><input id="manReg" placeholder="등록번호 직접 입력" style="flex:1"><button onclick="manualReg()">확인</button></div>' +
+    '<button class="sec big" onclick="closeModal()">닫기</button>');
+  if (typeof Html5Qrcode === 'undefined') { toast('카메라 기능을 불러오지 못했습니다. 직접 입력을 사용하세요.'); return; }
+  scanner = new Html5Qrcode('reader');
+  scanner.start({ facingMode: 'environment' }, { fps: 10, qrbox: { width: 260, height: 160 } },
+    function (txt) { if (!scanner) return; var cb = S.scanCb; closeModal(); cb(String(txt).trim()); }, function () {})
+    .catch(function () { toast('카메라를 열 수 없습니다. 직접 입력을 사용하세요.'); });
+}
+function manualReg() { var v = $('manReg').value.trim(); if (!v) return; var cb = S.scanCb; closeModal(); cb(v); }
+function stopScan() { if (!scanner) return; var s = scanner; scanner = null; try { s.stop().then(function () { s.clear(); }).catch(function () {}); } catch (e) {} }
+function openOrSetup(reg) { if (pat(reg)) openPatient(reg); else renderSetup(reg); }
 
-var API_URL = 'https://script.google.com/macros/s/AKfycbxLkbIwUQJVEKJa3FIFpy5kQTpV0ejSZNm0PUgBp2N7SOIigCSWmHtC-NJ23ox25UyqNw/exec';
+/* ===== 8. 환자 화면 ===== */
+function openPatient(reg, tab) { S.reg = reg; if (tab) S.tab = tab; renderPatient(); }
+function setTab(t) { S.tab = t; renderPatient(); }
+function renderPatient() {
+  var p = pat(S.reg); if (!p) { renderHome(); return; }
+  S.view = 'patient'; hdr('환자', 'renderHome()');
+  var o = owner(p.regNo), mine = o === S.user.empId, c = cfg(p), io = ioOf(now()), s = sums(p.regNo, io.ioDate, io.period);
+  var h = '<div class="card"><b style="font-size:18px">' + esc(pLabel(p)) + '</b>' +
+    '<div class="muted">담당: ' + (o ? esc(uname(o)) : '없음') + ' · ' + io.period + ' 구간 섭취 ' + s.i + 'ml · 배설 ' + s.o + 'ml</div><div class="row">' +
+    (mine ? '<button class="sec" onclick="renderSetup(' + js(p.regNo) + ')">환자 세팅</button><button class="sec" onclick="unassign()">담당 해제</button>'
+      : '<button onclick="assignMe()">담당으로 지정</button>' + (!o ? '<button class="sec" onclick="renderSetup(' + js(p.regNo) + ')">환자 세팅</button>' : '')) +
+    '</div></div>';
+  h += '<div class="tabs">' + [['in', '섭취'], ['out', '배설'], ['vs', 'V/S'], ['rec', '기록']].map(function (t) {
+    return '<button class="' + (S.tab === t[0] ? 'on' : '') + '" onclick="setTab(\'' + t[0] + '\')">' + t[1] + '</button>';
+  }).join('') + '</div>';
+  if (S.tab === 'in') h += tabIn(p, c, mine);
+  else if (S.tab === 'out') h += tabOut(p, c);
+  else if (S.tab === 'vs') h += tabVS();
+  else h += tabRec(p, mine);
+  $('main').innerHTML = h; afterInput();
+}
+function assignMe() {
+  var o = owner(S.reg);
+  if (o && !confirm('현재 담당: ' + uname(o) + '. 내 담당으로 가져올까요?')) return;
+  run(async function () { await api('assign', { regNo: S.reg, empId: S.user.empId }); await reload(); renderPatient(); });
+}
+function unassign() {
+  if (!confirm('담당을 해제할까요?')) return;
+  run(async function () { await api('assign', { regNo: S.reg, empId: '' }); await reload(); renderPatient(); });
+}
+async function saveRecs(recs) {
+  if (!recs.length) throw new Error('입력한 값이 없습니다.');
+  var dup = recs.some(function (n) {
+    return !n.slot && S.data.records.some(function (r) { return r.status !== 'deleted' && r.regNo === n.regNo && r.item === n.item && r.sub === n.sub && r.recordTime === n.recordTime; });
+  });
+  if (dup && !confirm('같은 시각에 같은 항목 기록이 이미 있습니다. 그래도 저장할까요?')) return;
+  await sendRecords(recs);
+  try { await reload(); } catch (e) {}
+  renderPatient();
+}
+
+/* ===== 9. 섭취 ===== */
+function tabIn(p, c, mine) {
+  if (!mine || S.user.job !== '간호사') return '<div class="card muted">섭취량은 담당 간호사만 입력할 수 있습니다. 위의 "담당으로 지정"을 누른 뒤 입력하세요.</div>';
+  var h = timeCard() + '<div class="card"><h3>수액</h3>', gen = liveFluids(p.regNo, '일반');
+  if (!gen.length) h += '<p class="muted">등록된 수액이 없습니다.</p>';
+  gen.forEach(function (f) {
+    var l = left(f);
+    h += '<div style="border-top:1px solid #eee;padding-top:6px"><b>' + esc(f.name) + '</b> <span class="muted">처방 ' + f.volume + 'ml · 잔량 ' + l + 'ml</span>';
+    if (l <= 0) h += '<div class="row"><span>완료</span><button class="sec" onclick="fluidSet(' + js(f.id) + ',\'완료\')">목록에서 내리기</button></div>';
+    else if (needReview(f)) h += '<div class="row"><span class="red">06:00 재설정: 잔량 ' + l + 'ml</span><button onclick="fluidCont(' + js(f.id) + ')">계속 투여</button><button class="warn" onclick="fluidSet(' + js(f.id) + ',\'종료\')">종료</button></div>';
+    else h += '<div class="row"><input class="sm" type="number" inputmode="decimal" data-d="fl_' + f.id + '" data-fluid="' + f.id + '" placeholder="ml"> ml 들어감 <button class="sec" onclick="fluidSet(' + js(f.id) + ',\'종료\')">종료</button></div>';
+    h += '</div>';
+  });
+  h += '<button class="sec" onclick="addFluidForm()">+ 수액·mix fluid 추가</button></div>' + mixCard(p);
+  if (c.diet) h += '<div class="card"><h3>식이</h3>' + DIET.map(function (d) { return '<div class="row"><label>' + d[1] + '</label>' + chips(d[0], RATIO, '', 'other toggle') + '</div>'; }).join('') + '</div>';
+  if (c.water) h += '<div class="card"><h3>물</h3><div class="row"><input class="sm" type="number" inputmode="decimal" id="water" data-d="water"> ml (눈금 물병)</div></div>';
+  return h + '<button class="big" onclick="saveIn()">저장 · EMR 전송</button>';
+}
+function fluidCont(id) { run(async function () { await api('updateFluid', { id: id, patch: { reviewDate: ioOf(now()).ioDate } }); await reload(); renderPatient(); }); }
+function fluidSet(id, st) {
+  if (st !== '완료' && !confirm(st + ' 처리할까요?')) return;
+  run(async function () { await api('updateFluid', { id: id, patch: { status: st, endAt: fmt(now()) } }); await reload(); renderPatient(); });
+}
+function mixSlots(f) {
+  if (f.mode === '일회') return [f.times];
+  var cur = ioOf(now()).ioDate, start = parse(f.createdAt), out = [];
+  start.setMinutes(0, 0, 0);
+  String(f.times).split(',').forEach(function (t) {
+    t = t.trim(); if (!/^\d{2}:\d{2}$/.test(t)) return;
+    [addDays(cur, -1), cur].forEach(function (ds) {
+      var dt = (mins(t) >= mins(setg('io').Day) ? ds : addDays(ds, 1)) + ' ' + t;
+      if (parse(dt) >= start) out.push(dt);
+    });
+  });
+  return out.sort();
+}
+function mixCard(p) {
+  var mix = liveFluids(p.regNo, 'mix'), n = now(), cur = ioOf(n).ioDate, h = '<div class="card"><h3>Mix fluid · 항생제</h3>';
+  S.slots = [];
+  if (!mix.length) return h + '<p class="muted">등록된 mix fluid가 없습니다.</p></div>';
+  mix.forEach(function (f) {
+    h += '<div style="border-top:1px solid #eee;padding-top:6px"><b>' + esc(f.name) + '</b> <span class="muted">' + f.volume + 'ml · ' + esc(f.mode) + ' ' + esc(f.times) +
+      '</span> <button class="sec" onclick="fluidSet(' + js(f.id) + ',\'중단\')">중단</button>';
+    mixSlots(f).forEach(function (dt) {
+      var rs = S.data.records.filter(function (x) { return x.fluidId === f.id && x.slot === dt && x.status !== 'deleted'; });
+      var done = rs.some(function (x) { return x.status === 'active'; }), held = rs.some(function (x) { return x.status === 'held'; });
+      if (done && ioOf(parse(dt)).ioDate < cur) return;
+      var i = S.slots.push({ f: f, dt: dt }) - 1;
+      h += '<div class="row"><span style="min-width:110px">' + dt.slice(5) + '</span>';
+      if (done) h += '<span>✔ 확인됨</span>';
+      else if (parse(dt) > n) h += '<span class="muted">예정</span>';
+      else h += '<input class="sm" type="number" inputmode="decimal" id="mx' + i + '" value="' + f.volume + '"> ml <button onclick="mixAct(' + i + ',false)">확인</button>' +
+        (held ? '<span class="muted">보류됨</span>' : '<button class="sec" onclick="mixAct(' + i + ',true)">보류</button>');
+      h += '</div>';
+    });
+    h += '</div>';
+  });
+  return h + '<p class="muted">투여 시각이 되면 용량이 자동으로 채워집니다. "확인"을 눌러야 EMR로 전송됩니다.</p></div>';
+}
+function mixAct(i, hold) {
+  var s = S.slots[i], v = Number($('mx' + i).value);
+  run(async function () {
+    if (isNaN(v) || v < 0) throw new Error('용량을 확인하세요.');
+    await saveRecs([mk(S.reg, '섭취', '수액', s.f.name + ' (mix)', v, 'ml', s.dt, { fluidId: s.f.id, slot: s.dt, status: hold ? 'held' : 'active' })]);
+  });
+}
+function addFluidForm() {
+  modal('<h3>수액 · mix fluid 추가</h3>' +
+    '<div class="row"><label>종류</label>' + chips('af_kind', ['일반 수액', 'mix fluid·항생제'], '일반 수액') + '</div>' +
+    '<div class="row"><label>이름</label><input id="af_name" placeholder="예: N/S 500"></div>' +
+    '<div class="row"><label>용량(ml)</label><input id="af_vol" type="number" inputmode="decimal" class="sm"></div>' +
+    '<div id="af_mix" style="display:none"><div class="row"><label>투여</label>' + chips('af_mode', ['반복', '일회'], '반복') + '</div>' +
+    '<div id="af_rep"><div class="row"><label>하루 횟수</label><span class="chips">' + ['1', '2', '3', '4', '5+'].map(function (n) {
+      return '<button type="button" onclick="afCount(\'' + n + '\')">' + n + '회</button>'; }).join('') + '</span></div>' +
+    '<div class="row"><label>투여 시각</label><input id="af_times" placeholder="예: 08:00,20:00"></div><p class="muted">항생제 등은 시각을 쉼표로 구분해 고치세요.</p></div>' +
+    '<div id="af_once" class="row" style="display:none"><label>투여 시각</label><input id="af_at" type="datetime-local" value="' + dtl(fmt(now())) + '"></div></div>' +
+    '<button class="big" onclick="addFluid()">등록</button><button class="sec big" onclick="closeModal()">취소</button>');
+  afterInput();
+}
+function afCount(n) {
+  if (n === '5+') { $('af_times').value = ''; toast('투여 시각을 직접 입력하세요.'); return; }
+  $('af_times').value = (setg('mixTimes')[n] || []).join(',');
+}
+function addFluid() {
+  run(async function () {
+    var mix = $('af_kind').value !== '일반 수액', name = $('af_name').value.trim(), vol = Number($('af_vol').value);
+    if (!name || !(vol > 0)) throw new Error('이름과 용량을 입력하세요.');
+    var f = { regNo: S.reg, kind: mix ? 'mix' : '일반', name: name, volume: vol, mode: '', times: '', status: '진행', reviewDate: ioOf(now()).ioDate, endAt: '', createdAt: fmt(now()) };
+    if (mix) {
+      f.mode = $('af_mode').value;
+      if (f.mode === '일회') { f.times = fromDtl($('af_at').value); if (!parse(f.times)) throw new Error('투여 시각을 입력하세요.'); }
+      else {
+        var ts = $('af_times').value.split(/[,，\s]+/).filter(Boolean).map(function (t) { return t.length === 4 ? '0' + t : t; });
+        if (!ts.length || ts.some(function (t) { return !/^\d{2}:\d{2}$/.test(t); })) throw new Error('투여 시각을 08:00,20:00 형식으로 입력하세요.');
+        f.times = ts.join(',');
+      }
+    }
+    await api('addFluid', { fluid: f }); closeModal(); await reload(); renderPatient(); toast('등록했습니다.');
+  });
+}
+function saveIn() {
+  run(async function () {
+    var t = recTime(), recs = [];
+    document.querySelectorAll('[data-fluid]').forEach(function (e) {
+      var v = val(e); if (!v) return;
+      var f = fluid(e.dataset.fluid), l = left(f);
+      if (v > l) throw new Error('[잔량 초과] ' + f.name + ' 잔량은 ' + l + 'ml입니다.');
+      recs.push(mk(S.reg, '섭취', '수액', f.name, v, 'ml', t, { fluidId: f.id }));
+    });
+    DIET.forEach(function (d) { var e = $(d[0]); if (e && e.value) recs.push(mk(S.reg, '섭취', '식이', d[1], e.value, '비율', t)); });
+    if ($('water')) { var w = val($('water')); if (w) recs.push(mk(S.reg, '섭취', '물', '', w, 'ml', t)); }
+    await saveRecs(recs);
+  });
+}
+
+/* ===== 10. 배설 ===== */
+function diaperW(c, t) {
+  var h = c.diaperHist || [], w = h[0] || { inner: 0, outer: 0, pad: 0 };
+  h.forEach(function (x) { if (x.from <= t) w = x; });
+  return w;
+}
+function cntRow(id, label, g) {
+  return '<div class="row"><label>' + label + '</label><button class="sec" type="button" onclick="cnt(\'' + id + '\',-1)">−</button>' +
+    '<input type="number" style="width:60px;text-align:center" id="' + id + '" data-d="' + id + '" data-def="0" value="0" oninput="calcDiaper()">' +
+    '<button class="sec" type="button" onclick="cnt(\'' + id + '\',1)">＋</button><span class="muted">1개 ' + g + 'g</span></div>';
+}
+function cnt(id, d) { var e = $(id); e.value = Math.max(0, (Number(e.value) || 0) + d); calcDiaper(); }
+function unitCard(title, key, unit) {
+  var u = unit === 'g' ? 'g' : '회', u2 = u === 'g' ? '회' : 'g';
+  return '<div class="card"><h3>' + title + '</h3><div class="row"><input class="sm" type="number" inputmode="decimal" id="' + key + '" data-d="' + key + '"> ' + u + '</div>' +
+    '<div class="row muted">추가란 <input class="sm" type="number" inputmode="decimal" id="' + key + '2" data-d="' + key + '2"> ' + u2 + '</div></div>';
+}
+function tabOut(p, c) {
+  var h = timeCard(), o = c.out || {};
+  if (o.fct) h += '<div class="card"><h3>FCT 소변</h3><div class="row"><input class="sm" type="number" inputmode="decimal" id="fct" data-d="fct"> ml (urine bag 비운 양)</div></div>';
+  if (o.diaper) {
+    var w = diaperW(c, fmt(now()));
+    h += '<div class="card"><h3>기저귀</h3><div class="row"><label>구분</label>' + chips('dtype', ['소변', '대변', '대변+소변'], '소변') + '</div>' +
+      '<div class="row"><label>전체 무게</label><input class="sm" type="number" inputmode="decimal" id="dw" data-d="dw" oninput="calcDiaper()"> g</div>' +
+      cntRow('dc_in', '속기저귀', w.inner) + cntRow('dc_out', '겉기저귀', w.outer) + cntRow('dc_pad', '디팬드', w.pad) +
+      '<div class="row"><b>계산 결과</b><span id="dres">-</span></div><p class="muted">기록 시각 당시 등록된 기저귀 무게로 계산합니다. 1g = 1ml</p></div>';
+  }
+  if (o.self) h += unitCard('자가배뇨 소변', 'o_self', c.selfUnit);
+  h += unitCard('대변' + (o.diaper ? ' (기저귀 외)' : ''), 'o_stool', c.stoolUnit);
+  if (c.vomit) h += '<div class="card"><h3>구토</h3><div class="row"><input class="sm" type="number" inputmode="numeric" id="vomit" data-d="vomit"> 회</div></div>';
+  if (c.drain) h += '<div class="card"><h3>배액</h3>' + (c.drains || []).map(function (d, i) {
+    return '<div class="row"><label>' + esc(d) + '</label><input class="sm" type="number" inputmode="decimal" id="dr' + i + '" data-d="dr' + i + '"> ml</div>'; }).join('') + '</div>';
+  return h + '<button class="big" onclick="saveOut()">저장 · EMR 전송</button>';
+}
+function calcDiaper() {
+  var p = pat(S.reg), e = $('dres'); if (!p || !e) return null;
+  if ($('dw').value === '') { e.textContent = '-'; e.className = ''; return null; }
+  var t = fromDtl($('recTime').value) || fmt(now()), w = diaperW(cfg(p), t);
+  var r = Number($('dw').value) - (w.inner * (Number($('dc_in').value) || 0) + w.outer * (Number($('dc_out').value) || 0) + w.pad * (Number($('dc_pad').value) || 0));
+  r = Math.round(r * 10) / 10;
+  if (r <= 0) { e.textContent = r + ' → 0 이하입니다. 다시 측정해 입력하세요'; e.className = 'red'; }
+  else { e.textContent = r + ($('dtype').value === '소변' ? ' ml' : ' g'); e.className = ''; }
+  return r;
+}
+function saveOut() {
+  run(async function () {
+    var t = recTime(), c = cfg(pat(S.reg)), recs = [], v;
+    if ($('fct') && (v = val($('fct')))) recs.push(mk(S.reg, '배설', '소변', 'FCT', v, 'ml', t));
+    if ($('dw') && $('dw').value !== '') {
+      var r = calcDiaper();
+      if (!(r > 0)) throw new Error('[기저귀 계산 오류] 계산 결과가 0 이하입니다. 무게와 기저귀 개수를 확인해 다시 입력하세요.');
+      var ty = $('dtype').value || '소변';
+      var det = '기저귀(전체 ' + $('dw').value + 'g, 속' + $('dc_in').value + '·겉' + $('dc_out').value + '·디팬드' + $('dc_pad').value + ')';
+      recs.push(mk(S.reg, '배설', ty, det, r, ty === '소변' ? 'ml' : 'g', t));
+    }
+    [['o_self', '소변', '자가배뇨', c.selfUnit], ['o_stool', '대변', '', c.stoolUnit]].forEach(function (k) {
+      if (!$(k[0])) return;
+      var u = k[3] === 'g' ? 'g' : '회', u2 = u === 'g' ? '회' : 'g', a = val($(k[0])), b = val($(k[0] + '2'));
+      if (a) recs.push(mk(S.reg, '배설', k[1], k[2], a, u, t));
+      if (b) recs.push(mk(S.reg, '배설', k[1], k[2], b, u2, t));
+    });
+    if ($('vomit') && (v = val($('vomit')))) recs.push(mk(S.reg, '배설', '구토', '', v, '회', t));
+    (c.drains || []).forEach(function (d, i) { var e = $('dr' + i); if (e && (v = val(e))) recs.push(mk(S.reg, '배설', '배액', d, v, 'ml', t)); });
+    await saveRecs(recs);
+  });
+}
+
+/* ===== 11. V/S ===== */
+function tabVS() {
+  var vt = setg('vsTimes'), rg = setg('vsRange'), opts = (vt.regular || []).concat(vt.special || []).concat(['기타']);
+  var h = '<div class="card"><h3>기록 시각</h3>' + chips('vst', opts, '') +
+    '<div id="vsOtherBox" class="row" style="display:none"><input type="datetime-local" id="vsOther" data-d="vsOther" value="' + dtl(fmt(now())) + '"></div>' +
+    '<p class="muted">정규 ' + (vt.regular || []).join(', ') + ' · 스페셜 ' + (vt.special || []).join(', ') + '</p></div><div class="card"><h3>활력징후</h3>';
+  VS.forEach(function (v) {
+    var r = rg[v[0]] || [];
+    h += '<div class="row"><label>' + v[0] + '</label><input class="sm" type="number" inputmode="decimal" step="any" id="vs_' + v[0] + '" data-d="vs_' + v[0] + '" oninput="vsColor()"> ' + v[1] +
+      ' <span class="muted">정상 ' + (r[0] != null ? r[0] : '') + '~' + (r[1] != null ? r[1] : '') + '</span></div>';
+  });
+  return h + '<p class="muted">정상 범위 밖 값은 빨간색으로만 표시하고, 모든 값을 저장할 수 있습니다.</p></div><button class="big" onclick="saveVS()">저장 · EMR(TPR) 전송</button>';
+}
+function vsColor() {
+  var rg = setg('vsRange');
+  VS.forEach(function (v) {
+    var e = $('vs_' + v[0]); if (!e) return;
+    var r = rg[v[0]] || [], x = Number(e.value);
+    e.classList.toggle('red', e.value !== '' && ((r[0] != null && x < r[0]) || (r[1] != null && x > r[1])));
+  });
+}
+function saveVS() {
+  run(async function () {
+    var s = $('vst').value, t;
+    if (!s) throw new Error('기록 시각 버튼을 고르세요.');
+    if (s === '기타') t = fromDtl($('vsOther').value);
+    else { var n = now(), d = fmtD(n); if (mins(s) > n.getHours() * 60 + n.getMinutes()) d = addDays(d, -1); t = d + ' ' + s; }
+    if (!parse(t)) throw new Error('기록 시각을 확인하세요.');
+    if (!inRange(t)) throw new Error('직전 I/O 하루보다 이전 시각은 기록할 수 없습니다.');
+    var kind = s === '기타' ? '기타' : ((setg('vsTimes').regular || []).indexOf(s) >= 0 ? '정규' : '스페셜'), recs = [];
+    VS.forEach(function (v) { var x = val($('vs_' + v[0])); if (x !== null) recs.push(mk(S.reg, 'VS', v[0], kind, x, v[1], t)); });
+    await saveRecs(recs);
+  });
+}
+
+/* ===== 12. 기록 (합계 · 수정 · 삭제) ===== */
+function tabRec(p, mine) {
+  var sn = since(), cur = ioOf(now()).ioDate, io = setg('io');
+  var h = '<div class="card"><h3>구간별 합계</h3><table><tr><th>일자</th><th>구간</th><th class="n">섭취 ml</th><th class="n">배설 ml(g)</th><th>횟수</th></tr>';
+  [cur, sn].forEach(function (ds) {
+    ['Day', 'Eve', 'Night', ''].forEach(function (pd) {
+      var s = sums(p.regNo, ds, pd);
+      h += '<tr' + (pd ? '' : ' style="font-weight:bold"') + '><td>' + ds.slice(5) + '</td><td>' + (pd || '24시간') + '</td><td class="n">' + s.i + '</td><td class="n">' + s.o +
+        '</td><td class="muted">' + Object.keys(s.c).map(function (k) { return esc(k) + ' ' + s.c[k]; }).join(', ') + '</td></tr>';
+    });
+  });
+  h += '</table><p class="muted">I/O 하루: ' + io.Day + ' ~ 다음 날 ' + addMin(io.Day, -1) + '</p></div>';
+  var list = recsOf(p.regNo).filter(function (r) { return r.ioDate >= sn; }).sort(function (a, b) { return a.recordTime < b.recordTime ? 1 : a.recordTime > b.recordTime ? -1 : 0; });
+  h += '<div class="card"><h3>기록 (' + sn.slice(5) + ' ' + io.Day + ' 이후)</h3>';
+  if (!list.length) h += '<p class="muted">기록이 없습니다.</p>';
+  list.forEach(function (r) {
+    var st = r.status === 'deleted' ? ' (삭제됨)' : r.status === 'held' ? ' (보류)' : r.note ? ' (' + r.note + ')' : '';
+    h += '<div style="border-top:1px solid #eee;padding:6px 0" class="' + (r.status === 'deleted' ? 'del' : '') + '"><b>' + esc(r.recordTime.slice(5)) + '</b> ' + esc(r.period) +
+      ' · ' + esc(r.cat) + ' · ' + esc(r.item) + (r.sub ? ' ' + esc(r.sub) : '') + ' · <b>' + esc(r.value) + ' ' + esc(r.unit) + '</b><span class="muted"> · ' + esc(uname(r.by)) + st + '</span>';
+    if (mine && r.status === 'active') h += '<div class="row"><button class="sec" onclick="editRec(' + js(r.id) + ')">수정</button><button class="warn" onclick="delRec(' + js(r.id) + ')">삭제</button></div>';
+    h += '</div>';
+  });
+  if (!mine) h += '<p class="muted">수정·삭제는 담당 간호사만 할 수 있습니다.</p>';
+  return h + '</div>';
+}
+function editRec(id) {
+  var r = S.data.records.find(function (x) { return x.id === id; }); if (!r) return;
+  var v = prompt('값 수정 (' + r.item + ', 단위 ' + r.unit + ')', r.value); if (v === null) return; v = v.trim();
+  var t = prompt('기록 시각 수정 (예: 2026-11-25 10:30)', r.recordTime); if (t === null) return;
+  run(async function () {
+    if (r.unit !== '비율' && (v === '' || isNaN(v) || Number(v) < 0)) throw new Error('값이 올바르지 않습니다.');
+    if (!parse(t)) throw new Error('시각 형식이 올바르지 않습니다.');
+    t = fmt(parse(t));
+    if (!inRange(t) || r.ioDate < since()) throw new Error('직전 I/O 하루 이후 기록만 수정할 수 있습니다.');
+    var f = r.fluidId && fluid(r.fluidId);
+    if (f && f.kind === '일반' && Number(v) > left(f) + Number(r.value)) throw new Error('[잔량 초과] 처방 용량을 넘습니다.');
+    var io = ioOf(parse(t));
+    await api('editRecord', { id: id, patch: { value: v, recordTime: t, ioDate: io.ioDate, period: io.period } });
+    await reload(); renderPatient(); toast('수정했습니다 (EMR 반영)');
+  });
+}
+function delRec(id) {
+  if (!confirm('이 기록을 삭제할까요? EMR에서도 삭제 처리됩니다.')) return;
+  run(async function () { await api('deleteRecord', { id: id }); await reload(); renderPatient(); toast('삭제했습니다 (EMR 반영)'); });
+}
+
+/* ===== 13. 환자 세팅 ===== */
+function renderSetup(reg) {
+  var p = pat(reg), c = p ? cfg(p) : {}, o = c.out || {}, w = (c.diaperHist || []).slice(-1)[0] || {};
+  S.view = 'setup'; S.reg = reg; hdr('환자 세팅', p ? 'renderPatient()' : 'renderHome()');
+  var drains = setg('drains') || [], myDr = c.drains || [];
+  var extra = myDr.filter(function (d) { return drains.indexOf(d) < 0; }).join(', ');
+  var ck = function (id, on, label) { return '<label class="row" style="margin:6px 0"><input type="checkbox" id="' + id + '"' + (on ? ' checked' : '') + '> ' + label + '</label>'; };
+  var wv = function (x) { return x != null ? x : ''; };
+  var h = '<div class="card"><h3>기본 정보</h3><div class="row"><label>등록번호</label><b>' + esc(reg) + '</b></div>' +
+    '<div class="row"><label>이름(선택)</label><input id="s_name" value="' + esc(p ? p.name : '') + '"></div>' +
+    '<div class="row"><label>병실(선택)</label><input id="s_room" value="' + esc(p ? p.room : '') + '"></div>' +
+    '<p class="muted">이름·병실번호는 필요할 때만 입력합니다. 앱 화면에만 표시되고 EMR로 보내지 않습니다.</p></div>';
+  h += '<div class="card"><h3>섭취</h3>' + ck('s_diet', c.diet, '식이 기록 사용') + ck('s_water', c.water, '물 섭취 기록 사용') + '<p class="muted">수액·mix fluid는 섭취 탭에서 등록합니다.</p></div>';
+  h += '<div class="card"><h3>배설</h3>' + ck('s_fct', o.fct, 'FCT') + ck('s_diaper', o.diaper, '기저귀') + ck('s_self', o.self, '자가배뇨') +
+    '<div class="row"><label>속기저귀</label><input class="sm" type="number" inputmode="decimal" id="s_wi" value="' + wv(w.inner) + '"> g</div>' +
+    '<div class="row"><label>겉기저귀</label><input class="sm" type="number" inputmode="decimal" id="s_wo" value="' + wv(w.outer) + '"> g</div>' +
+    '<div class="row"><label>디팬드</label><input class="sm" type="number" inputmode="decimal" id="s_wp" value="' + wv(w.pad) + '"> g</div>' +
+    '<p class="muted">기저귀 제품을 바꾸면 무게를 새로 입력하세요. 이전 기록은 그대로 두고 지금 이후 기록부터 새 무게로 계산합니다.</p>' +
+    '<div class="row"><label>자가배뇨 단위</label><select id="s_su"><option value="횟수">횟수</option><option value="g">g</option></select></div>' +
+    '<div class="row"><label>대변 단위</label><select id="s_tu"><option value="횟수">횟수</option><option value="g">g</option></select></div>' +
+    ck('s_vomit', c.vomit, '구토 기록 사용 (횟수)') + ck('s_drain', c.drain, '배액 기록 사용') +
+    '<div style="padding-left:20px">' + drains.map(function (d, i) { return ck('s_dr' + i, myDr.indexOf(d) >= 0, esc(d)); }).join('') +
+    '<div class="row"><label>기타 drain</label><input id="s_drx" value="' + esc(extra) + '" placeholder="쉼표로 구분"></div></div></div>';
+  h += '<button class="big" onclick="saveSetup()">저장</button>';
+  if (p && isMine(reg)) h += '<button class="warn big" onclick="releasePt()">환자 해제 (퇴원·전동)</button>';
+  $('main').innerHTML = h;
+  $('s_su').value = c.selfUnit || '횟수'; $('s_tu').value = c.stoolUnit || '횟수';
+}
+function saveSetup() {
+  run(async function () {
+    var reg = S.reg, p = pat(reg), old = p ? cfg(p) : {}, drains = setg('drains') || [];
+    var c = { diet: $('s_diet').checked, water: $('s_water').checked,
+      out: { fct: $('s_fct').checked, diaper: $('s_diaper').checked, self: $('s_self').checked },
+      selfUnit: $('s_su').value, stoolUnit: $('s_tu').value, vomit: $('s_vomit').checked, drain: $('s_drain').checked,
+      drains: drains.filter(function (d, i) { return $('s_dr' + i).checked; }).concat($('s_drx').value.split(/[,，]/).map(function (s) { return s.trim(); }).filter(Boolean)),
+      diaperHist: (old.diaperHist || []).slice() };
+    if (c.out.diaper) {
+      var wi = $('s_wi').value, wo = $('s_wo').value, wp = $('s_wp').value;
+      if (wi === '' || wo === '' || wp === '') throw new Error('기저귀 무게 3가지를 입력하세요. 쓰지 않는 종류는 0을 입력하세요.');
+      var nw = { inner: Number(wi), outer: Number(wo), pad: Number(wp) }, last = c.diaperHist[c.diaperHist.length - 1];
+      if ([nw.inner, nw.outer, nw.pad].some(function (x) { return isNaN(x) || x < 0; })) throw new Error('기저귀 무게를 확인하세요.');
+      if (!last || last.inner !== nw.inner || last.outer !== nw.outer || last.pad !== nw.pad) { nw.from = c.diaperHist.length ? fmt(now()) : '2000-01-01 00:00'; c.diaperHist.push(nw); }
+    }
+    if (c.drain && !c.drains.length) throw new Error('사용할 drain을 1개 이상 고르세요.');
+    await api('savePatient', { patient: { regNo: reg, name: $('s_name').value.trim(), room: $('s_room').value.trim(), config: c } });
+    await reload(); renderPatient(); toast('환자 세팅을 저장했습니다.');
+  });
+}
+function releasePt() {
+  if (!confirm('이 환자를 해제할까요? (퇴원·전동)')) return;
+  run(async function () { await api('release', { regNo: S.reg }); await reload(); renderHome(); toast('환자를 해제했습니다.'); });
+}
+
+/* ===== 14. 설정 · 승인 · 시연 모드 ===== */
+function row3(label, id, o) {
+  return '<div class="row"><label>' + label + '</label>' + ['Day', 'Eve', 'Night'].map(function (k) {
+    return k + ' <input style="width:80px" id="' + id + k + '" value="' + esc(o[k]) + '">'; }).join(' ') + '</div>';
+}
+function renderSettings() {
+  S.view = 'settings'; hdr('설정', 'renderHome()');
+  var head = S.user.role === '수간호사', rg = setg('vsRange'), q = LS.get('queue', []).length, fl = LS.get('failed', []);
+  var h = '<div class="card"><h3>시연 모드 (시제품 전용)</h3><div class="row"><input type="datetime-local" id="demoT" value="' + dtl(fmt(now())) + '"></div>' +
+    '<button onclick="setDemo()">이 시각으로 바꾸기</button><button class="sec" onclick="realTime()">실제 시각으로</button><button class="sec" onclick="resetAlerts()">알림 기록 초기화</button>' +
+    '<p class="muted">알림·06:00 재설정·교대 자동 로그아웃을 바로 확인할 때 씁니다. 같은 알림을 다시 보려면 알림 기록 초기화를 누르세요.</p></div>';
+  h += '<div class="card"><h3>전송 상태</h3><p>전송 대기 ' + q + '건 · 전송 실패 ' + fl.length + '건</p><button class="sec" onclick="flushQueue(true)">지금 다시 보내기</button>' +
+    fl.map(function (x) { return '<p class="muted">' + esc(x.time + ' ' + x.error) + '</p>'; }).join('') +
+    (fl.length ? '<button class="sec" onclick="LS.del(\'failed\');renderSettings()">실패 목록 지우기</button>' : '') + '</div>';
+  h += '<div class="card"><h3>V/S 정상 범위</h3>' + VS.map(function (v) {
+    var r = rg[v[0]] || [];
+    return '<div class="row"><label>' + v[0] + '</label><input class="sm" id="rg0_' + v[0] + '" value="' + (r[0] != null ? r[0] : '') + '"> ~ <input class="sm" id="rg1_' + v[0] + '" value="' + (r[1] != null ? r[1] : '') + '"></div>';
+  }).join('') + '<button onclick="saveRange()">저장</button><p class="muted">모든 간호사가 바꿀 수 있으며 변경 기록이 남습니다. 칸을 비우면 그쪽 기준은 쓰지 않습니다.</p></div>';
+  if (head) {
+    var us = S.data.users.filter(function (u) { return u.empId !== S.user.empId; });
+    var ub = function (id, st, label, cls) { return '<button class="' + (cls || 'sec') + '" onclick="setUser(' + js(id) + ',' + js(st) + ')">' + label + '</button>'; };
+    h += '<div class="card"><h3>가입 승인 (수간호사)</h3><button class="sec" onclick="run(async function(){await reload();renderSettings();})">새로고침</button>' +
+      (us.length ? '' : '<p class="muted">가입한 사용자가 없습니다.</p>') + us.map(function (u) {
+        var b = u.status === '대기' ? ub(u.empId, '승인', '승인', 'x') + ub(u.empId, '거절', '거절', 'warn') : u.status === '승인' ? ub(u.empId, '중지', '사용 중지', 'warn') : ub(u.empId, '승인', '다시 승인');
+        return '<div class="row"><span style="flex:1">' + esc(u.name) + ' (' + esc(u.empId) + ') · ' + esc(u.job) + ' · <b>' + esc(u.status) + '</b></span>' + b + '</div>';
+      }).join('') + '</div>';
+    var vt = setg('vsTimes'), mt = setg('mixTimes');
+    h += '<div class="card"><h3>병동 설정 (수간호사)</h3><p class="muted">시각은 08:00 형식, 여러 개는 쉼표로 구분합니다.</p>' +
+      row3('근무 시작', 'w_sh', setg('shift')) + row3('I/O 구간 시작', 'w_io', setg('io')) +
+      '<div class="row"><label>V/S 정규</label><input id="w_vr" value="' + (vt.regular || []).join(',') + '"></div>' +
+      '<div class="row"><label>V/S 스페셜</label><input id="w_vs" value="' + (vt.special || []).join(',') + '"></div>' +
+      [1, 2, 3, 4].map(function (n) { return '<div class="row"><label>Mix ' + n + '회</label><input id="w_m' + n + '" value="' + (mt[n] || []).join(',') + '"></div>'; }).join('') +
+      '<div class="row"><label>Drain 목록</label><input id="w_dr" value="' + esc((setg('drains') || []).join(',')) + '"></div>' +
+      '<button onclick="saveWard()">병동 설정 저장</button></div>';
+  }
+  $('main').innerHTML = h;
+}
+function setUser(id, st) { run(async function () { await api('setUser', { empId: id, status: st }); await reload(); renderSettings(); }); }
+function saveRange() {
+  run(async function () {
+    var r = {};
+    VS.forEach(function (v) {
+      var a = $('rg0_' + v[0]).value.trim(), b = $('rg1_' + v[0]).value.trim();
+      if ((a && isNaN(a)) || (b && isNaN(b))) throw new Error(v[0] + ' 값을 확인하세요.');
+      r[v[0]] = [a === '' ? null : Number(a), b === '' ? null : Number(b)];
+    });
+    await api('saveSettings', { values: { vsRange: r } }); await reload(); renderSettings(); toast('V/S 정상 범위를 저장했습니다.');
+  });
+}
+function saveWard() {
+  run(async function () {
+    var re = /^\d{2}:\d{2}$/;
+    var fix = function (t) { t = t.trim(); return t.length === 4 ? '0' + t : t; };
+    var list = function (id) { var a = $(id).value.split(/[,，\s]+/).filter(Boolean).map(fix); a.forEach(function (t) { if (!re.test(t)) throw new Error('시각 형식을 확인하세요: ' + t); }); return a; };
+    var tri = function (id) {
+      var o = {}; ['Day', 'Eve', 'Night'].forEach(function (k) { var v = fix($(id + k).value); if (!re.test(v)) throw new Error('시각 형식을 확인하세요: ' + v); o[k] = v; });
+      if (!(mins(o.Day) < mins(o.Eve) && mins(o.Eve) < mins(o.Night))) throw new Error('Day < Eve < Night 순서로 입력하세요.');
+      return o;
+    };
+    var mt = {}; [1, 2, 3, 4].forEach(function (n) { mt[n] = list('w_m' + n); });
+    var values = { shift: tri('w_sh'), io: tri('w_io'), vsTimes: { regular: list('w_vr'), special: list('w_vs') }, mixTimes: mt,
+      drains: $('w_dr').value.split(/[,，]/).map(function (s) { return s.trim(); }).filter(Boolean) };
+    await api('saveSettings', { values: values }); await reload();
+    LS.set('session', { empId: S.user.empId, shift: shiftId() });
+    renderSettings(); toast('병동 설정을 저장했습니다.');
+  });
+}
+function setDemo() {
+  var t = parse(fromDtl($('demoT').value)); if (!t) return;
+  LS.set('offset', t.getTime() - Date.now()); toast('앱 시각을 ' + fmt(t) + '(으)로 바꿨습니다.');
+  tick(); if (S.user && S.view === 'settings') renderSettings();
+}
+function realTime() { LS.del('offset'); toast('실제 시각으로 돌아왔습니다.'); tick(); if (S.user && S.view === 'settings') renderSettings(); }
+function resetAlerts() { if (S.user) LS.del('fired_' + S.user.empId); toast('알림 기록을 초기화했습니다.'); tick(); }
+
+/* ===== 15. 알림 ===== */
+var AC = null;
+function unlockAudio() { try { if (!AC) { var A = window.AudioContext || window.webkitAudioContext; AC = new A(); } if (AC.state === 'suspended') AC.resume(); } catch (e) {} }
+document.addEventListener('click', unlockAudio);
+function beep() {
+  if (navigator.vibrate) navigator.vibrate([300, 150, 300]);
+  if (!AC) return;
+  [0, 0.4].forEach(function (s) {
+    var o = AC.createOscillator(), g = AC.createGain(); o.frequency.value = 880; g.gain.value = 0.25;
+    o.connect(g); g.connect(AC.destination); o.start(AC.currentTime + s); o.stop(AC.currentTime + s + 0.25);
+  });
+}
+function alertDefs() {
+  var io = setg('io'), cl = [io.Eve, io.Night, io.Day], defs = [];
+  cl.forEach(function (c, i) {
+    defs.push({ hm: addMin(c, -30), id: 'close' });
+    var span = (mins(cl[(i + 1) % 3]) - mins(c) + 1440) % 1440;
+    for (var k = 180; k < span; k += 180) defs.push({ hm: addMin(c, k), id: 'mid' });
+  });
+  defs.push({ hm: io.Day, id: 'review' });
+  return defs;
+}
+function checkAlerts() {
+  if (!S.user || !S.data) return;
+  var n = now(), key = 'fired_' + S.user.empId, fired = LS.get(key, {}), hit = [];
+  alertDefs().forEach(function (d) {
+    var t = new Date(n.getTime()); t.setHours(+d.hm.slice(0, 2), +d.hm.slice(3, 5), 0, 0);
+    if (t > n) t.setDate(t.getDate() - 1);
+    var k = fmt(t) + ' ' + d.id;
+    if (n - t < 30 * 60000 && !fired[k]) { fired[k] = n.getTime(); hit.push(d); }
+  });
+  if (!hit.length) return;
+  LS.set(key, fired);
+  var mine = S.data.patients.filter(function (p) { return isMine(p.regNo); });
+  var flu = mine.filter(function (p) { return liveFluids(p.regNo, '일반').some(function (f) { return left(f) > 0; }); });
+  var rev = mine.filter(function (p) { return liveFluids(p.regNo, '일반').some(needReview); });
+  var msgs = [];
+  hit.forEach(function (d) {
+    if (d.id === 'close') {
+      if (mine.length) msgs.push(['AL-01', '마감 30분 전입니다. 섭취량과 배설량을 입력하세요', mine]);
+      if (flu.length) msgs.push(['AL-06', '중간수액량을 확인하세요', flu]);
+    }
+    if (d.id === 'mid' && flu.length) msgs.push(['AL-05', '중간수액량을 확인하세요', flu]);
+    if (d.id === 'review' && rev.length) msgs.push(['AL-04', '수액을 확인한 뒤 계속 투여/종료를 고르고 새 수액을 세팅하세요', rev]);
+  });
+  if (msgs.length) showAlert(msgs);
+}
+function showAlert(msgs) {
+  stopScan(); beep();
+  var t = fmt(now()), log = LS.get('alog_' + S.user.empId, []), h = '<h3>🔔 알림 · ' + t.slice(11) + '</h3>';
+  msgs.forEach(function (m) {
+    h += '<div class="card" style="background:#fff7e6"><b>' + esc(m[1]) + '</b> <span class="muted">' + m[0] + '</span>' + m[2].map(function (p) {
+      return '<div class="row pt" onclick="closeModal();openPatient(' + js(p.regNo) + ')">' + esc(S.user.name) + ' 간호사 담당 – ' + esc(pLabel(p)) + ' ›</div>'; }).join('') + '</div>';
+    log.unshift({ t: t, id: m[0], msg: m[1], pts: m[2].map(function (p) { return pLabel(p); }).join(', ') });
+  });
+  LS.set('alog_' + S.user.empId, log.slice(0, 50));
+  modal(h + '<button class="big" onclick="closeModal()">확인</button>');
+}
+function showAlog() {
+  var log = LS.get('alog_' + S.user.empId, []);
+  modal('<h3>알림 기록</h3>' + (log.length ? log.map(function (a) {
+    return '<div class="card"><b>' + esc(a.t) + ' ' + esc(a.id) + '</b><div>' + esc(a.msg) + '</div><div class="muted">' + esc(a.pts) + '</div></div>'; }).join('')
+    : '<p class="muted">알림이 없습니다.</p>') + '<button class="big" onclick="closeModal()">닫기</button>');
+}
+
+/* ===== 16. 시작 · 주기 확인 ===== */
+function tick() {
+  var off = LS.get('offset', 0), bar = $('demoBar');
+  bar.style.display = off ? 'block' : 'none'; if (off) bar.textContent = '시연 모드 · 앱 시각 ' + fmt(now());
+  if (!S.user || !S.data) return;
+  var s = LS.get('session', {});
+  if (s.shift && s.shift !== shiftId()) { logout(true); return; }
+  var c = $('clock'); if (c) c.textContent = fmt(now()).slice(11);
+  checkAlerts(); flushQueue();
+  if (S.view === 'home' && Date.now() - S.lastLoad > 60000) reload().then(function () { if (S.view === 'home' && S.user) renderHome(); }).catch(function () {});
+}
+setInterval(tick, 15000);
+(function () { var s = LS.get('session', null); if (s && apiUrl()) login(s.empId, true); else renderLogin(); tick(); })();
+</script>
+</body>
 </html>
